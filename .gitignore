@@ -1,0 +1,7 @@
+.idea/
+__pycache__/
+checkpoints/
+checkpoints2/
+data/
+logs/
+
