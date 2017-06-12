@@ -3,7 +3,6 @@ import tensorflow as tf
 
 def create_lstm_cell(prev_h, prev_c, x_t, sample_size, state_size):
     with tf.variable_scope("lstm_cell"):
-        print("==============================================")
         W_i, W_f, W_o, W_g = [
             tf.get_variable(
                 name,
@@ -21,9 +20,7 @@ def create_lstm_cell(prev_h, prev_c, x_t, sample_size, state_size):
             [("b_i", 0.0), ("b_f", 1.0), ("b_o", 0.0), ("b_g", 0.0)]
         ]
 
-        print("x_t: {}, prev_h: {}".format(x_t.get_shape(), prev_h.get_shape()))
         merged_inputs = tf.concat([x_t, prev_h], axis=1)
-        print("merged_inputs:", merged_inputs.get_shape())
 
         i, f, o, g = [
             f(tf.matmul(merged_inputs, W) + b)
@@ -39,7 +36,6 @@ def create_lstm_cell(prev_h, prev_c, x_t, sample_size, state_size):
 
 def create_unrolled_lstm(signal, sample_size, state_size, number_of_steps):
     with tf.variable_scope("lstm") as current_variable_scope:
-        print("----------------------------------------------")
         h_0, c_0 = [tf.get_variable(
             name,
             shape=[1, state_size],
@@ -58,7 +54,6 @@ def create_unrolled_lstm(signal, sample_size, state_size, number_of_steps):
             if t == 0:
                 current_variable_scope.reuse_variables()
 
-        print("----------------------------------------------")
         return h, c
 
 
