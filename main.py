@@ -53,33 +53,34 @@ class Assignment3Trainer(object):
 
         # Inputs
         x = tf.placeholder(tf.float32, [None, 28, 28], "x")
+        x_lengths = tf.placeholder(tf.int32, [None], "x_lengths")
         y = tf.placeholder(tf.float32, [None, 10], "y")
         keep_prob = tf.placeholder_with_default(tf.constant(0.4, tf.float32), [])
         is_training = tf.placeholder_with_default(tf.constant(True, tf.bool), [])
 
         # Model
         signal = x
-        print(signal.get_shape())
+        # print(signal.get_shape())
 
-        last_h, last_c = utility.create_unrolled_lstm(signal, 28, state_size, 28)
+        last_h, last_c = utility.create_unrolled_lstm(signal, x_lengths, 28, state_size, 28)
 
         signal = tf.concat([last_h, last_c], 1)
-        print(signal.get_shape())
+        # print(signal.get_shape())
 
         with tf.variable_scope("fc_1"):
             signal = utility.fully_connected(signal, 1024)
-        print(signal.get_shape())
+        # print(signal.get_shape())
 
         signal = tf.nn.relu(signal)
-        print(signal.get_shape())
+        # print(signal.get_shape())
 
         signal = tf.nn.dropout(signal, keep_prob, name="dropout")
-        print(signal.get_shape())
+        # print(signal.get_shape())
 
         with tf.variable_scope("fc_2"):
             signal = utility.fully_connected(signal, 10)
 
-        print(signal.get_shape())
+        # print(signal.get_shape())
 
         # Measures
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=signal, name="loss"))
@@ -124,11 +125,38 @@ class Assignment3Trainer(object):
     def preprocess_input(self, x):
         return np.reshape(x, [-1, self.IMAGE_SIZE, self.IMAGE_SIZE])
 
+    def get_training_batch(self, crop_images=False):
+        x, y = self.mnist.train.next_batch(self.TRAINING_BATCH_SIZE)
+        x = self.preprocess_input(x)
+
+        if not crop_images:
+            lengths = np.ones(x.shape[0], dtype=np.int32) * x.shape[1]
+            return x, y, lengths
+
+        sizes = np.random.randint(24, 29, [x.shape[0], 2])
+        top_left = np.array([28, 28]) // 2 - (sizes // 2)
+        bottom_right = top_left + sizes
+
+        padded_samples = np.zeros(x.shape)
+        lengths = np.zeros([x.shape[0]], dtype=np.int32)
+        for i in range(x.shape[0]):
+            sample = x[i, top_left[i, 0]:bottom_right[i, 0], top_left[i, 1]:bottom_right[i, 1]]
+            size0 = np.prod(sample.shape)
+            sample = np.reshape(sample, [size0])
+            size1 = size0 + (-size0) % self.TIMESTEP_SIZE
+            padded = np.zeros([size1])
+            padded[:size0] = sample
+            length = size1 // self.TIMESTEP_SIZE
+            lengths[i] = length
+            padded_samples[i, :length, :] = np.reshape(padded, [length, self.TIMESTEP_SIZE])
+
+        return padded_samples, y, lengths
+
     def train_model(self):
         print("Training the model")
         m = self.m
         steps = self.parameters["training_steps"]
-        small_steps = 430
+        small_steps = 430  # approx. epoch size
         big_steps = steps // small_steps
 
         self.validate_model(-1)
@@ -137,8 +165,7 @@ class Assignment3Trainer(object):
             step = big_step * small_steps
             for small_step in tqdm(range(small_steps), total=small_steps, desc="steps ", leave=True):
                 step = big_step * small_steps + small_step
-                x, y = self.mnist.train.next_batch(self.TRAINING_BATCH_SIZE)
-                x = self.preprocess_input(x)
+                x, y, lengths = self.get_training_batch(crop_images=True)
 
                 _, summaries, loss, accuracy = self.session.run(
                     fetches=[
@@ -147,10 +174,12 @@ class Assignment3Trainer(object):
                         m["loss"],
                         m["accuracy"],
                     ],
-                    feed_dict={m["x"]: x, m["y"]: y, m["is_training"]: True, m["keep_prob"]: 0.4}
+                    feed_dict={
+                        m["x"]: x, m["x_lengths"]: lengths, m["y"]: y, m["is_training"]: True, m["keep_prob"]: 0.4
+                    }
                 )
 
-                tqdm.write("loss: {},\taccuracy: {:.3f}".format(loss, accuracy))
+                tqdm.write("loss: {:.4f},\taccuracy: {:.4f}".format(loss, accuracy))
                 m["t_summary_writer"].add_summary(summaries, step)
                 m["t_summary_writer"].flush()
 
@@ -163,14 +192,14 @@ class Assignment3Trainer(object):
         m = self.m
         x = self.preprocess_input(self.mnist.validation.images)
         y = self.mnist.validation.labels
+        lengths = np.ones([x.shape[0]], dtype=np.int32) * 28
 
         loss, accuracy, summaries = self.session.run(
             fetches=[
-                self.model["loss"], self.model["accuracy"], m["t_merged_summaries"],
+                m["loss"], m["accuracy"], m["t_merged_summaries"],
             ],
-            feed_dict={self.model["x"]: x, self.model["y"]: y, m["is_training"]: True, m["keep_prob"]: 1.}
+            feed_dict={m["x"]: x, m["x_lengths"]: lengths, m["y"]: y, m["is_training"]: True, m["keep_prob"]: 1.}
         )
-        # print("\n[{}] accuracy: {}".format(training_step, accuracy))
         tqdm.write("{} VALIDATION: loss: {},\taccuracy: {:.3f}".format(training_step, loss, accuracy))
         m["v_summary_writer"].add_summary(summaries, training_step)
         m["v_summary_writer"].flush()

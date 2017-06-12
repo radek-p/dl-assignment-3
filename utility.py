@@ -34,7 +34,7 @@ def create_lstm_cell(prev_h, prev_c, x_t, sample_size, state_size):
         return h, c
 
 
-def create_unrolled_lstm(signal, sample_size, state_size, number_of_steps):
+def create_unrolled_lstm(signal, lengths, sample_size, state_size, number_of_steps):
     with tf.variable_scope("lstm") as current_variable_scope:
         h_0, c_0 = [tf.get_variable(
             name,
@@ -49,7 +49,10 @@ def create_unrolled_lstm(signal, sample_size, state_size, number_of_steps):
         for t in range(number_of_steps):
             print(h.get_shape(), c.get_shape())
             x_t = signal[:, t, :]
-            h, c = create_lstm_cell(h, c, x_t, sample_size, state_size)
+
+            new_h, new_c = create_lstm_cell(h, c, x_t, sample_size, state_size)
+            h = tf.where(t < lengths, new_h, h)
+            c = tf.where(t < lengths, new_c, c)
 
             if t == 0:
                 current_variable_scope.reuse_variables()
