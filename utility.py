@@ -34,30 +34,33 @@ def create_lstm_cell(prev_h, prev_c, x_t, sample_size, state_size):
         return h, c
 
 
-def create_unrolled_lstm(signal, lengths, sample_size, state_size, number_of_steps):
+def create_unrolled_lstm(inputs, lengths, sample_size, state_size, number_of_steps):
     with tf.variable_scope("lstm") as current_variable_scope:
+        num_batches = tf.shape(inputs[0])[0]
         h_0, c_0 = [tf.get_variable(
             name,
             shape=[1, state_size],
             initializer=tf.random_normal_initializer(mean=0.0, stddev=0.05)
         ) for name in ["h_0", "c_0"]]
         h, c = [
-            tf.tile(param, [tf.shape(signal)[0], 1])
+            tf.tile(param, [num_batches, 1])
             for param in [h_0, c_0]
         ]
 
-        for t in range(number_of_steps):
-            print(h.get_shape(), c.get_shape())
-            x_t = signal[:, t, :]
+        h_list = []
+        c_list = []
 
-            new_h, new_c = create_lstm_cell(h, c, x_t, sample_size, state_size)
+        for t in range(number_of_steps):
+            new_h, new_c = create_lstm_cell(h, c, inputs[t], sample_size, state_size)
             h = tf.where(t < lengths, new_h, h)
             c = tf.where(t < lengths, new_c, c)
+            h_list.append(h)
+            c_list.append(c)
 
             if t == 0:
                 current_variable_scope.reuse_variables()
 
-        return h, c
+        return h_list, c_list
 
 
 def fully_connected(signal, fan_out):

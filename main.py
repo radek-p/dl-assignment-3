@@ -20,13 +20,15 @@ class Assignment3Trainer(object):
         self.m = {}
         self.model = self.m
         self.mnist = mnist
+        self.validation_set = (None, None, None)
 
         self.parameters = {
-            "seed": -1,
             "verbosity": 0,
             "training_steps": -1,
             "image_output_dir": "img_samples",
             "save_path_prefix": "./checkpoints",
+            "deep": False,
+            "crop_inputs": False,
         }
 
         if parameters is not None:
@@ -37,50 +39,45 @@ class Assignment3Trainer(object):
                 print("Missing value for parameter: '{}', program may not work correctly.".format(parameter))
 
         self.TRAINING_BATCH_SIZE = 128
-        self.VALIDATION_BATCH_SIZE = 16
         self.IMAGE_SIZE = 28
         self.TIMESTEP_SIZE = 28
-        self.VALIDATION_STEPS = -1
-
-        self.training_summaries = []
-        self.validation_summaries = []
-
-        # print("Images will be shuffled with \t--seed={}".format(self.parameters["seed"]))
-        self.generator = random.Random(self.parameters["seed"])
+        self.NUM_TIME_STEPS = 28
+        self.CLASS_NUM = 10
 
     def create_training_pipeline(self):
-        state_size = 1024
-
         # Inputs
-        x = tf.placeholder(tf.float32, [None, 28, 28], "x")
+        x = tf.placeholder(tf.float32, [None, self.NUM_TIME_STEPS, self.TIMESTEP_SIZE], "x")
         x_lengths = tf.placeholder(tf.int32, [None], "x_lengths")
-        y = tf.placeholder(tf.float32, [None, 10], "y")
+        y = tf.placeholder(tf.float32, [None, self.CLASS_NUM], "y")
         keep_prob = tf.placeholder_with_default(tf.constant(0.4, tf.float32), [])
         is_training = tf.placeholder_with_default(tf.constant(True, tf.bool), [])
 
         # Model
-        signal = x
-        # print(signal.get_shape())
+        if self.parameters["deep"]:
+            layer_state_sizes = [32, 1024]
+        else:
+            layer_state_sizes = [1024]
 
-        last_h, last_c = utility.create_unrolled_lstm(signal, x_lengths, 28, state_size, 28)
+        inputs = [x[:, t, :] for t in range(self.NUM_TIME_STEPS)]
+        h_list = inputs
+        c_list = [None]
+        prev_size = 28
 
-        signal = tf.concat([last_h, last_c], 1)
-        # print(signal.get_shape())
+        for i, state_size in enumerate(layer_state_sizes):
+            with tf.variable_scope("LSTM_{}".format(i)):
+                h_list, c_list = utility.create_unrolled_lstm(h_list, x_lengths, prev_size, state_size, 28)
+            prev_size = state_size
+
+        signal = tf.concat([h_list[-1], c_list[-1]], 1)
 
         with tf.variable_scope("fc_1"):
             signal = utility.fully_connected(signal, 1024)
-        # print(signal.get_shape())
-
         signal = tf.nn.relu(signal)
-        # print(signal.get_shape())
 
         signal = tf.nn.dropout(signal, keep_prob, name="dropout")
-        # print(signal.get_shape())
 
         with tf.variable_scope("fc_2"):
-            signal = utility.fully_connected(signal, 10)
-
-        # print(signal.get_shape())
+            signal = utility.fully_connected(signal, self.CLASS_NUM)
 
         # Measures
         loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y, logits=signal, name="loss"))
@@ -97,7 +94,7 @@ class Assignment3Trainer(object):
 
         training_summaries = [
             tf.summary.scalar("loss", loss),
-            tf.summary.scalar("loss", accuracy),
+            tf.summary.scalar("accuracy", accuracy),
         ]
 
         return locals()
@@ -125,16 +122,33 @@ class Assignment3Trainer(object):
     def preprocess_input(self, x):
         return np.reshape(x, [-1, self.IMAGE_SIZE, self.IMAGE_SIZE])
 
+    def prepare_validation_set(self):
+        x = self.preprocess_input(self.mnist.validation.images)
+        y = self.mnist.validation.labels
+        lengths = np.ones([x.shape[0]], dtype=np.int32) * self.NUM_TIME_STEPS
+
+        if self.parameters["crop_validation_inputs"]:
+            x, lengths = self.crop_images(x)
+
+        self.validation_set = (x, y, lengths)
+
+    def get_validation_set(self):
+        return self.validation_set
+
     def get_training_batch(self, crop_images=False):
         x, y = self.mnist.train.next_batch(self.TRAINING_BATCH_SIZE)
         x = self.preprocess_input(x)
 
         if not crop_images:
             lengths = np.ones(x.shape[0], dtype=np.int32) * x.shape[1]
-            return x, y, lengths
+        else:
+            x, lengths = self.crop_images(x)
 
+        return x, y, lengths
+
+    def crop_images(self, x):
         sizes = np.random.randint(24, 29, [x.shape[0], 2])
-        top_left = np.array([28, 28]) // 2 - (sizes // 2)
+        top_left = np.array([self.IMAGE_SIZE, self.IMAGE_SIZE]) // 2 - (sizes // 2)
         bottom_right = top_left + sizes
 
         padded_samples = np.zeros(x.shape)
@@ -150,12 +164,13 @@ class Assignment3Trainer(object):
             lengths[i] = length
             padded_samples[i, :length, :] = np.reshape(padded, [length, self.TIMESTEP_SIZE])
 
-        return padded_samples, y, lengths
+        return padded_samples, lengths
 
     def train_model(self):
         print("Training the model")
         m = self.m
         steps = self.parameters["training_steps"]
+        self.prepare_validation_set()
         small_steps = 430  # approx. epoch size
         big_steps = steps // small_steps
 
@@ -165,14 +180,11 @@ class Assignment3Trainer(object):
             step = big_step * small_steps
             for small_step in tqdm(range(small_steps), total=small_steps, desc="steps ", leave=True):
                 step = big_step * small_steps + small_step
-                x, y, lengths = self.get_training_batch(crop_images=True)
+                x, y, lengths = self.get_training_batch(crop_images=self.parameters["crop_inputs"])
 
                 _, summaries, loss, accuracy = self.session.run(
                     fetches=[
-                        m["optimize_op_1"],
-                        m["t_merged_summaries"],
-                        m["loss"],
-                        m["accuracy"],
+                        m["optimize_op_1"], m["t_merged_summaries"], m["loss"], m["accuracy"]
                     ],
                     feed_dict={
                         m["x"]: x, m["x_lengths"]: lengths, m["y"]: y, m["is_training"]: True, m["keep_prob"]: 0.4
@@ -190,15 +202,15 @@ class Assignment3Trainer(object):
     def validate_model(self, training_step):
         print("Running VALIDATION")
         m = self.m
-        x = self.preprocess_input(self.mnist.validation.images)
-        y = self.mnist.validation.labels
-        lengths = np.ones([x.shape[0]], dtype=np.int32) * 28
+        x, y, lengths = self.get_validation_set()
 
         loss, accuracy, summaries = self.session.run(
             fetches=[
                 m["loss"], m["accuracy"], m["t_merged_summaries"],
             ],
-            feed_dict={m["x"]: x, m["x_lengths"]: lengths, m["y"]: y, m["is_training"]: True, m["keep_prob"]: 1.}
+            feed_dict={
+                m["x"]: x, m["x_lengths"]: lengths, m["y"]: y, m["is_training"]: True, m["keep_prob"]: 1.
+            }
         )
         tqdm.write("{} VALIDATION: loss: {},\taccuracy: {:.3f}".format(training_step, loss, accuracy))
         m["v_summary_writer"].add_summary(summaries, training_step)
@@ -224,8 +236,11 @@ class Assignment3Trainer(object):
 def main(argv):
     parser = argparse.ArgumentParser(prog='main.py')
     parser.add_argument("--debug", required=False, action="store_true", help="Turn on TF Debugger.")
-    parser.add_argument("--seed", required=False, default=random.randint(0, sys.maxsize), type=int,
-                        help="Set seed for pseudo-random shuffle of data.")
+    parser.add_argument("--deep", required=False, action="store_true", help="Create deep model (many LSTM layers).")
+    parser.add_argument("--crop-inputs", required=False, action="store_true",
+                        help="Train model on variable length input.")
+    parser.add_argument("--crop-validation-inputs", required=False, action="store_true",
+                        help="Validate model on variable length input.")
     parser.add_argument("--training-steps", required=False, default=10000, type=int,
                         help="Number of training steps.")
 
@@ -245,9 +260,11 @@ def main(argv):
         mnist = mnist_input.read_data_sets("./data/", one_hot=True, validation_size=5000)
 
         t = Assignment3Trainer(session, mnist, {
-            "seed": int(options.seed),
             "training_steps": options.training_steps,
             "run_idx": get_run_idx(".logs"),
+            "deep": options.deep,
+            "crop_inputs": options.crop_inputs,
+            "crop_validation_inputs": options.crop_validation_inputs,
         })
 
         print("Creating graph")
