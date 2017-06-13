@@ -21,6 +21,7 @@ class Assignment3Trainer(object):
         self.model = self.m
         self.mnist = mnist
         self.validation_set = (None, None, None)
+        self.test_set = (None, None, None)
 
         self.parameters = {
             "verbosity": 0,
@@ -132,8 +133,21 @@ class Assignment3Trainer(object):
 
         self.validation_set = (x, y, lengths)
 
+    def prepare_test_set(self):
+        x = self.preprocess_input(self.mnist.test.images)
+        y = self.mnist.test.labels
+        lengths = np.ones([x.shape[0]], dtype=np.int32) * self.NUM_TIME_STEPS
+
+        if self.parameters["crop_validation_inputs"]:
+            x, lengths = self.crop_images(x)
+
+        self.test_set = (x, y, lengths)
+
     def get_validation_set(self):
         return self.validation_set
+
+    def get_test_set(self):
+        return self.test_set
 
     def get_training_batch(self, crop_images=False):
         x, y = self.mnist.train.next_batch(self.TRAINING_BATCH_SIZE)
@@ -171,6 +185,7 @@ class Assignment3Trainer(object):
         m = self.m
         steps = self.parameters["training_steps"]
         self.prepare_validation_set()
+        self.prepare_test_set()
         small_steps = 430  # approx. epoch size
         big_steps = steps // small_steps
 
@@ -199,10 +214,21 @@ class Assignment3Trainer(object):
             self.validate_model(step)
             tqdm.write("Big step #{} done.".format(big_step))
 
+        self.test_model(big_steps * small_steps + 1)
+
     def validate_model(self, training_step):
         print("Running VALIDATION")
+        validation_set = self.get_validation_set()
+        return self.run_model_on_set(validation_set, training_step)
+
+    def test_model(self, training_step):
+        print("Running FINAL TESTING")
+        test_set = self.get_test_set()
+        return self.run_model_on_set(test_set, training_step)
+
+    def run_model_on_set(self, _set, training_step):
         m = self.m
-        x, y, lengths = self.get_validation_set()
+        x, y, lengths = _set
 
         loss, accuracy, summaries = self.session.run(
             fetches=[
@@ -212,7 +238,7 @@ class Assignment3Trainer(object):
                 m["x"]: x, m["x_lengths"]: lengths, m["y"]: y, m["is_training"]: True, m["keep_prob"]: 1.
             }
         )
-        tqdm.write("{} VALIDATION: loss: {},\taccuracy: {:.3f}".format(training_step, loss, accuracy))
+        tqdm.write("{} ---> loss: {},\taccuracy: {:.3f}".format(training_step, loss, accuracy))
         m["v_summary_writer"].add_summary(summaries, training_step)
         m["v_summary_writer"].flush()
 
